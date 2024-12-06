@@ -1,0 +1,196 @@
+---
+title: "p8105_restroom_final"
+output: html_document
+---
+### The group members (names and UNIs) 
+
+* Carrie Wu, Kw3104
+* Huiyan Ni, Hn2453
+* Rita Wang, Ryw2109
+* Megan Panier, Map2365
+* Minghe Wang, mw3845
+
+### Operational Restrooms Across NYC
+Although public restrooms are readily available to us, they are not always usable. This could be due to malfunctions of the restroom or the entirety of the restroom is closed due to the location being closed for holiday or for the season. Analyzing the available of operational restrooms in NYC may help to prevent individuals from going to public restroom while worrying it may not be available.
+
+#### The intended final products 
+Our final product will be a comprehensive webpage with four main sections: an introduction to the project and dataset, data visualizations comparing restroom conditions, an interactive map of operational restrooms, and a detailed report with findings and future recommendations. This will allow users to explore restroom accessibility and discover patterns in restroom availability across different areas of NYC. 
+
+#### The anticipated data sources and planned analyses / visualizations / coding challenges
+We will source our data from NYC Open Data on Public Restrooms and the train station dataset from our class resources. Planned analyses will include mapping operational restrooms by location using latitude and longitude, visualizing accessibility across NYC train stations, and comparing restrooms by accessibility and gender accommodations. A significant challenge may be aligning columns from the two datasets for accurate analysis.
+
+#### The planned timeline 
+Our timeline includes completing data tidying by 11/22/2024, visualizations by 11/30/2024, the webpage by 12/06/2024, and a recorded presentation by 12/12/2024. Our team will collaborate on GitHub for proposal creation, using .Rmd to render the document as a GitHub document for submission.
+
+### Data Cleaning
+
+```{r default_setting, echo = FALSE, message = FALSE, warning = FALSE, results = 'hide'}
+library(tidyverse)
+library(sf)
+library(ggplot2)
+library(purrr)
+library(tidyverse)
+library(dplyr)
+library(janitor)
+library(here)
+library(leaflet)
+library(reader)
+
+
+knitr::opts_chunk$set(
+  fig.width = 6,
+  fig.asp = .6,
+  out.width = "90%"
+)
+
+theme_set(theme_bw() + theme(legend.position = "bottom"))
+```
+
+```{r clean_restroom}
+# Import data
+restroom_df = read_csv(here::here("./Data/Public_Restrooms_20241203.csv")) %>%
+  janitor::clean_names()
+
+# Clean restroom data
+restroom_cleaned <- restroom_df %>% 
+  select(
+    -website, -operator, -hours_of_operation
+  ) %>% 
+  rename(
+    restroom_latitude = latitude,
+    restroom_longitude = longitude,
+    restroom_location = location
+  ) %>% 
+  mutate(
+    restroom_latitude = as.numeric(restroom_latitude),
+    restroom_longitude = as.numeric(restroom_longitude),
+    open = factor(
+      open,
+      levels = c("Future", "Seasonal", "Year Round"),
+      ordered = TRUE
+    ),
+    accessibility = factor(
+      accessibility,
+      levels = c("Not Accessible", "Partially Accessible", "Fully Accessible"),
+      ordered = TRUE
+    ),
+    changing_stations = case_when(
+      changing_stations %in% c("Yes, in single-stall all gender restroom only",
+                                "Yes, in women's restroom only",
+                                "Yes") ~ 1,
+      changing_stations == "No" ~ 0
+    ),
+    status = case_when(
+      status %in% c("Not Operational",
+                    "Closed for Construction",
+                    "Closed") ~ 0,
+      status == "Operational" ~ 1
+    )
+  )
+
+# Convert dataframe to sf for spatial operations
+restroom_sf <- st_as_sf(restroom_cleaned, coords = c("restroom_longitude", "restroom_latitude"), crs = 4326)
+
+# Filter restrooms near transit
+restroom_near_transit <- restroom_cleaned %>% 
+  filter(location_type == 'Transit')
+```
+
+MTA reports that there is 63 out of 423 subway stations provide restrooms 7am - 7pm and in restroom_df that we imported from NYC Open Data, only `r nrow(restroom_near_transit)` restroom were marked as in the location of subway out of `r nrow(restroom_df)` recorded restrooms.
+
+
+```{r clean_subway}
+# Load the dataset
+subway_df <- read_csv(here::here("./Data/NYC_Transit_Subway_Entrance_And_Exit_Data.csv"))
+
+# Clean the dataset
+subway_cleaned <- subway_df |>
+  janitor::clean_names() |> 
+  select(
+    line, station_name, station_latitude, station_longitude, 
+    route1, route2, route3, route4, route5, route6, 
+    route7, route8, route9, route10, route11, 
+    entry, exit_only, vending, entrance_type, ada
+  ) |> 
+  mutate(across(starts_with("route"), ~ replace_na(as.character(.), ""))) |>
+   mutate(
+    station_latitude = as.numeric(station_latitude),
+    station_longitude = as.numeric(station_longitude)
+  )
+```
+
+
+### Mapping 
+map subway station location
+```{r}
+leaflet(data = subway_cleaned) %>%
+  addTiles() %>% 
+  addCircleMarkers(
+    lng = ~station_longitude, 
+    lat = ~station_latitude, 
+    label = ~station_name, # Station name as a label
+    popup = ~paste("Line:", line, "<br>", "ADA Accessible:", ada), 
+    radius = 5, color = "blue", fillOpacity = 0.7
+  )
+```
+
+map restroom location
+```{r}
+  leaflet(data = restroom_cleaned) %>%
+    addTiles() %>% 
+    addMarkers(
+      lng = ~restroom_longitude,
+      lat = ~restroom_latitude,
+      label = ~facility_name,
+      popup = ~paste0(
+        "<b>Restroom:</b> ", facility_name, "<br>",
+        "<b>Location:</b> ", restroom_location, "<br>",
+        "<b>Accessibility:</b> ", accessibility
+      ),
+      icon = makeIcon(
+        iconUrl = "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-yellow.png",
+        iconWidth = 20,
+        iconHeight = 30
+      )
+    )
+```
+
+```{r}
+# Mapping function
+create_map <- leaflet(data = restroom_cleaned, subway_cleaned) %>%
+    addTiles() %>% 
+    # Add subway stations (blue markers)
+    addCircleMarkers(
+      data = subway_cleaned,
+      lng = ~station_longitude,
+      lat = ~station_latitude,
+      label = ~station_name,
+      popup = ~paste0(
+        "<b>Station:</b> ", station_name, "<br>",
+        "<b>Line:</b> ", line, "<br>",
+        "<b>ADA Accessible:</b> ", ada
+      ),
+      color = "blue",
+      fillOpacity = 0.7,
+      radius = 5
+    ) %>% 
+     # Add restrooms (yellow triangle markers)
+    addMarkers(
+      data = restroom_cleaned,
+      lng = ~restroom_longitude,
+      lat = ~restroom_latitude,
+      label = ~facility_name,
+      popup = ~paste0(
+        "<b>Restroom:</b> ", facility_name, "<br>",
+        "<b>Location:</b> ", restroom_location, "<br>",
+        "<b>Accessibility:</b> ", accessibility
+      ),
+      icon = makeIcon(
+        iconUrl = "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-yellow.png",
+        iconWidth = 20,
+        iconHeight = 30
+      )
+    )
+
+```
+
